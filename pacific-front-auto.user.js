@@ -1,21 +1,47 @@
 // ==UserScript==
 // @name         Pacific Front 自动排阵与游玩
 // @namespace    local.pacific-front
-// @version      1.2.2
-// @description  使用页面原有预测引擎，自动进行当前行动；支持只读预览和停止。
+// @version      1.3.0
+// @description  使用页面原有预测引擎，自动进行当前行动；支持只读预览和停止。已适配 asia/eu/com 战区与国服 oceanfront.wowsgame.cn。
 // @match        https://pacificfront.worldofwarships.asia/*
+// @match        https://pacificfront.worldofwarships.eu/*
+// @match        https://pacificfront.worldofwarships.com/*
+// @match        https://oceanfront.wowsgame.cn/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
 
 (function (root) {
   'use strict';
-  const SCRIPT_VERSION = '1.2.2';
+  const SCRIPT_VERSION = '1.3.0';
   const VERSION = 'ad60d10b';
+  // 适配的战区源站。统一定义，便于新增或排查。
+  const ALLOWED_ORIGINS = Object.freeze([
+    'https://pacificfront.worldofwarships.asia',
+    'https://pacificfront.worldofwarships.eu',
+    'https://pacificfront.worldofwarships.com',
+    'https://oceanfront.wowsgame.cn'
+  ]);
+  // WG 各战区路径前缀可能是语言码（en/ru/zh/zh-tw…），国服 oceanfront 可能无前缀。
+  const KNOWN_LANGS = Object.freeze(new Set(
+    ['en', 'ru', 'ja', 'de', 'fr', 'pl', 'es', 'it', 'pt', 'tr', 'cs', 'ko', 'th', 'vi', 'zh', 'zh-cn', 'zh-tw']));
+  function pageLang() {
+    const seg = location.pathname.split('/')[1] || '';
+    return KNOWN_LANGS.has(seg.toLowerCase()) ? seg : '';
+  }
+  // 从当前路径安全解析 operationId / keypointId，兼容“有/无语言前缀”两种情况。
+  function routeIds() {
+    const m = location.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/?)?operations\/(?:([^/]+)\/?)?([^/]+)?/i);
+    if (!m) return { operationId: null, keypointId: null };
+    return {
+      operationId: m[1] ? decodeURIComponent(m[1]) : null,
+      keypointId: m[2] ? decodeURIComponent(m[2]) : null
+    };
+  }
   const defaults = Object.freeze({ minWinRate: 0.80, targetWinRate: 0.90, maxBattles: 30, delayMs: 2000,
     searchRestarts: 6, searchPasses: 3, maxPredictions: 12000, syncPage: true,
     fillAllSlots: true, useModifiers: true, autoBuy: true, purchaseBudget: Infinity,
-    minModifierGain: 0.05, maxModifiersPerBattle: 2, returnToMenu: true });
+    minModifierGain: 0.05, maxModifiersPerBattle: 2, returnToMenu: true, strictVersion: false });
   const finished = k => ['cleared', 'missed'].includes(k.status);
   const slots = k => Array.from({ length: 4 }, (_, i) => k.slots?.[String(i)] ?? null);
   const power = c => Object.values(c?.specs ?? {}).reduce((a, b) => a + b, 0);
@@ -324,7 +350,7 @@
     revalidatePlan, findPageBridge, toPageCard, placePageCards, improveModifiers, eventPrice,
     effectPayloads, availableCards, makeEffect, predict, optimize };
   if (typeof module === 'object' && module.exports) { module.exports = internals; return; }
-  if (location.origin !== 'https://pacificfront.worldofwarships.asia') return;
+  if (!ALLOWED_ORIGINS.includes(location.origin)) return;
   if (root.PacificFrontBot) { console.info('PacificFrontBot 已加载。更新脚本后请刷新游戏网页，以加载新版本。'); return; }
 
   let running = false, stopped = false, ui = null;
@@ -343,8 +369,12 @@
     checkpoint();
   };
   function validate() {
-    if (!root.settings?.STATIC_URL?.includes(`/${VERSION}/`))
-      throw Error(`页面版本不匹配，本脚本适配 ${VERSION}；需重新核对接口。`);
+    const pageVersion = (root.settings?.STATIC_URL || '').match(/\/([0-9a-f]{6,})\//)?.[1] || null;
+    if (pageVersion && pageVersion !== VERSION) {
+      const msg = `当前页面构建版本为 ${pageVersion}，本脚本针对 ${VERSION} 编写。`;
+      if (config.strictVersion) throw Error(msg + '（已启用 strictVersion）请核对接口后再运行。');
+      log('提示：' + msg + '若预测引擎或接口有变动，行为可能异常。');
+    }
     if (!root.adeck?.predict || !root.defaultState?.settings?.collection?.cards)
       throw Error('游戏未加载完毕。请先登录、打开一个行动，等待页面显示后重试。');
     if (!Number.isFinite(config.minWinRate) || config.minWinRate < 0 || config.minWinRate > 1)
@@ -399,8 +429,8 @@
     if (!config.syncPage && !required) return;
     try {
       let bridge = findPageBridge(document);
-      const lang = location.pathname.split('/')[1] || 'en';
-      const path = `/${lang}/operations/${encodeURIComponent(id)}/${encodeURIComponent(kp.id)}`;
+      const lang = pageLang();
+      const path = (lang ? '/' + lang : '') + `/operations/${encodeURIComponent(id)}/${encodeURIComponent(kp.id)}`;
       if (location.pathname.replace(/\/$/, '') !== path) {
         if (!bridge.router) throw Error('未找到页面路由');
         await bridge.router.navigate(path);
@@ -461,7 +491,8 @@
   async function menu(final = false) {
     if (!config.returnToMenu) return;
     checkpoint();
-    const path = '/en/operations';
+    const lang = pageLang();
+    const path = (lang ? '/' + lang : '') + '/operations';
     const bridge = findPageBridge(document);
     if (bridge.router) { await bridge.router.navigate(path); log('已返回行动主菜单。'); }
     else if (final && typeof location.assign === 'function') location.assign(path);
@@ -529,10 +560,10 @@
     validate();
     const state = await api('state/');
     if (state.status?.state === 'unauth') throw Error('请先登录游戏。');
-    const routeId = location.pathname.match(/^\/[^/]+\/operations\/([^/]+)/)?.[1];
-    const id = state.status?.operationId ?? (routeId ? decodeURIComponent(routeId) : null);
+    const route = routeIds();
+    const id = state.status?.operationId ?? route.operationId;
     if (!id) throw Error('请先在网页上选择一个行动，进入行动详情后再启动。');
-    if (routeId && state.status?.operationId && decodeURIComponent(routeId) !== state.status.operationId)
+    if (route.operationId && state.status?.operationId && route.operationId !== state.status.operationId)
       throw Error('页面所选行动与服务器当前行动不同，请打开当前行动再启动。');
     let op = await readOperation(id);
     if (op.isFinished) throw Error('当前行动已结束。请在网页上选择下一个行动。');
@@ -584,9 +615,9 @@
         return;
       }
       if (battles >= config.maxBattles) { log('已达到本次战斗上限，暂停。'); return; }
-      const openedKeypoint = location.pathname.match(/^\/[^/]+\/operations\/[^/]+\/([^/]+)/)?.[1];
+      const openedKeypoint = route.keypointId;
       const remaining = stage.keypoints.filter(k => !finished(k) &&
-        (!fillOnly || !openedKeypoint || k.id === decodeURIComponent(openedKeypoint)));
+        (!fillOnly || !openedKeypoint || k.id === openedKeypoint));
       if (!remaining.length) throw Error('当前阶段已无可打节点，但目标未达成。请手动检查。');
       const inventory = await readyInventory();
       let choice = null;
@@ -666,5 +697,5 @@
   shadow.querySelector('#stop').onclick = () => root.PacificFrontBot.stop();
   shadow.querySelector('#hide').onclick = e => { ui.hidden = !ui.hidden; e.target.textContent = ui.hidden ? '展开' : '收起'; };
   document.documentElement.append(host);
-  log(`v${SCRIPT_VERSION} 已加载。“自动选卡”只填卡槽；“自动游玩”会选卡并连续战斗。`);
+  log(`v${SCRIPT_VERSION} 已加载（支持 ${ALLOWED_ORIGINS.length} 个战区）。“自动选卡”只填卡槽；“自动游玩”会选卡并连续战斗。`);
 })(typeof window === 'object' ? window : globalThis);
