@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pacific Front 自动排阵与游玩
 // @namespace    local.pacific-front
-// @version      1.8.0
+// @version      1.9.0
 // @description  使用页面原有预测引擎，自动进行当前行动；支持只读预览和停止。
 // @match        https://pacificfront.worldofwarships.asia/*
 // @match        https://pacificfront.worldofwarships.eu/*
@@ -13,7 +13,7 @@
 
 (function (root) {
   'use strict';
-  const SCRIPT_VERSION = '1.8.0';
+  const SCRIPT_VERSION = '1.9.0';
   const VERSION = 'ad60d10b';
   // Region coverage checked against abab-114514/wws-script at e98f5f08b5b04e1d2e014dc4b035aa02edc23d1b.
   const ALLOWED_ORIGINS = Object.freeze(['https://pacificfront.worldofwarships.asia',
@@ -34,7 +34,7 @@
     searchRestarts: 6, searchPasses: 3, maxPredictions: 12000, syncPage: true,
     fillAllSlots: true, useModifiers: true, autoBuy: true, purchaseBudget: Infinity,
     minModifierGain: 0, maxModifiersPerBattle: Infinity, maxModifierPredictions: 12000,
-    modifierBeamWidth: 16, maxJointPredictions: 60000, maxSearchMs: 4000, preferNoModifiers: true, returnToMenu: true });
+    modifierBeamWidth: 16, maxJointPredictions: 60000, maxSearchMs: 4000, unlimitedHardSearch: true, preferNoModifiers: true, returnToMenu: true });
   const finished = k => ['cleared', 'missed'].includes(k.status);
   const slots = k => Array.from({ length: 4 }, (_, i) => k.slots?.[String(i)] ?? null);
   const power = c => Object.values(c?.specs ?? {}).reduce((a, b) => a + b, 0);
@@ -238,10 +238,10 @@
       (config.preferNoModifiers && a.safe && b.safe ? (a.modifiers?.flat().length ?? 0) - (b.modifiers?.flat().length ?? 0) : 0) ||
       b.score - a.score;
   }
-  // Joint coordinate search: every candidate card is evaluated with both modifier slots.
+  // Joint coordinate search followed, when needed, by uncapped complete enumeration.
   // No card is filtered by its unmodified win rate. All effects are resolved on the full board.
   async function optimizeJoint(engine, settings, kp, candidates, effects, inventory, config,
-      checkpoint, yieldUI, seedPlans = [], rateCache = new Map()) {
+      checkpoint, yieldUI, seedPlans = [], rateCache = new Map(), onProgress = () => {}) {
     const now = () => typeof performance === 'object' ? performance.now() : Date.now();
     const startedAt = now(), deadline = startedAt + (config.maxSearchMs ?? 4000);
     checkpoint();
@@ -258,7 +258,7 @@
     // never freeze the naked lineup or exclude a card because of its naked probability.
     if (config.preferNoModifiers && allocations.length > 1 && config.maxModifiersPerBattle !== 0 && config.maxJointPredictions > 4) {
       naked = await optimizeJoint(engine, settings, kp, candidates, effects, inventory,
-        { ...config, useModifiers: false, maxSearchMs: (config.maxSearchMs ?? 4000) / 4,
+        { ...config, useModifiers: false, unlimitedHardSearch: false, maxSearchMs: (config.maxSearchMs ?? 4000) / 4,
           maxJointPredictions: Math.min(8000, Math.max(1, Math.floor(config.maxJointPredictions / 4))) },
         checkpoint, yieldUI, seedPlans.map(p => ({ ...p, modifiers: [[], [], [], []] })), rateCache);
       if (naked?.safe && naked.targetDeficit === 0 && naked.cards.filter(Boolean).length === Math.min(4, candidates.length)) return naked;
@@ -268,6 +268,7 @@
     const byCode = new Map(pool.map(c => [c.code, c]));
     const cache = new Map(), lineups = new Set();
     let best = null, predictions = 0, firstError = '', limited = false;
+    let exhaustive = false, exhausted = false, exhaustiveLineups = 0;
     let restartLimit = Infinity, restartExhausted = false, budgetLimited = false;
     const limit = (config.maxJointPredictions ?? 60000) - (naked?.jointPredictions ?? 0);
     const preparedPredict = createPredictor(engine, core, kp, effects);
@@ -291,9 +292,9 @@
       }
       const key = JSON.stringify([cards.map(c => c?.code ?? null), mods]);
       if (cache.has(key)) return cache.get(key);
-      if (best && now() >= deadline) { limited = true; return null; }
-      if (predictions >= limit) { limited = true; return null; }
-      if (predictions >= restartLimit || (best && now() >= restartDeadline)) { restartExhausted = true; budgetLimited = true; return null; }
+      if (!exhaustive && best && now() >= deadline) { limited = true; return null; }
+      if (!exhaustive && predictions >= limit) { limited = true; return null; }
+      if (!exhaustive && (predictions >= restartLimit || (best && now() >= restartDeadline))) { restartExhausted = true; budgetLimited = true; return null; }
       predictions++;
       let rates;
       try {
@@ -305,14 +306,18 @@
           rateCache.set(key, rates);
         }
       }
-      catch (error) { firstError ||= error.message; cache.set(key, null); return null; }
+      catch (error) { firstError ||= error.message; throw error; }
       const expected = expectedWins(kp, cards, rates);
       const boss = rates.reduce((n, p, i) => n + (cards[i] && isBoss(slots(kp)[i]?.enemy) ? p : 0), 0);
       const score = (config.fillAllSlots ? cards.filter(Boolean).length * 100000 : 0) + expected * 1000 + boss * 3000 -
         cards.filter(Boolean).length * 2 - cards.reduce((n, c) => n + power(c), 0) * 0.001;
       const plan = { cards: cards.slice(), modifiers: mods, rates, expected, score,
         ...planMetrics(kp, cards, rates, config) };
-      cache.set(key, plan); lineups.add(cards.map(c => c?.code ?? '-').join('|'));
+      // Bound memory, not the search space. Eviction may cause re-computation but never
+      // prevents a legal combination from being enumerated.
+      if (cache.size >= 30000) cache.delete(cache.keys().next().value);
+      cache.set(key, plan);
+      if (!exhaustive) lineups.add(cards.map(c => c?.code ?? '-').join('|'));
       if (!best || compare(plan, best) < 0) best = plan;
       return plan;
     }
@@ -401,6 +406,51 @@
       }
       if (limited) break;
     }
+    if (config.unlimitedHardSearch && !perfect() && pool.length) {
+      exhaustive = true; limited = false; budgetLimited = false; restartExhausted = false;
+      onProgress({ phase: 'exhaustive', evaluations: predictions, elapsedMs: Math.round(now() - startedAt), rates: best?.rates });
+      // Every legal full fleet (or every maximum-occupancy partial fleet when short of
+      // cards), every ordering and every legal allocation of both modifier groups.
+      // No assumption about independent slots is valid: effects can cross the board.
+      const cards = [null, null, null, null], mods = emptyMods(), used = new Set(), consumed = new Map();
+      const required = config.fillAllSlots ? Math.min(4, pool.length) : 1;
+      function* arrangements(pos, occupied, itemCount) {
+        if (occupied + 4 - pos < required) return;
+        if (pos === 4) { if (occupied >= required) yield null; return; }
+        const preferred = best?.cards[pos];
+        const choices = preferred ? [preferred, ...pool.filter(c => c.code !== preferred.code)] : pool;
+        for (const card of choices) {
+          if (used.has(card.code)) continue;
+          cards[pos] = card; used.add(card.code);
+          for (const allocation of allocations) {
+            if (itemCount + allocation.length > modifierLimit || allocation.some(id => (consumed.get(id) ?? 0) >= (stock.get(id) ?? 0))) continue;
+            mods[pos] = allocation;
+            for (const id of allocation) consumed.set(id, (consumed.get(id) ?? 0) + 1);
+            yield* arrangements(pos + 1, occupied + 1, itemCount + allocation.length);
+            for (const id of allocation) consumed.set(id, consumed.get(id) - 1);
+          }
+          used.delete(card.code);
+        }
+        if (!config.fillAllSlots || pool.length < 4) {
+          cards[pos] = null; mods[pos] = [];
+          yield* arrangements(pos + 1, occupied, itemCount);
+        }
+      }
+      let lastProgress = now();
+      for (const _ of arrangements(0, 0, 0)) {
+        checkpoint(); exhaustiveLineups++;
+        evaluate(cards, mods);
+        const pause = cooperate(); if (pause) await pause;
+        if (now() - lastProgress >= 3000) {
+          lastProgress = now();
+          onProgress({ phase: 'progress', evaluations: predictions, elapsedMs: Math.round(now() - startedAt), rates: best?.rates });
+        }
+        if (perfect()) break;
+      }
+      exhausted = !perfect();
+      onProgress({ phase: exhausted ? 'exhausted' : 'target', evaluations: predictions,
+        elapsedMs: Math.round(now() - startedAt), rates: best?.rates });
+    }
     // Remove items only when doing so preserves the chosen probability quality.
     if (config.preferNoModifiers && best?.safe) {
       restartLimit = limit; restartDeadline = deadline;
@@ -420,7 +470,8 @@
     if (!best && firstError) throw Error(firstError);
     return best ? { ...best, predictions: lineups.size + (naked?.predictions ?? 0),
       jointPredictions: predictions + (naked?.jointPredictions ?? 0), cacheHits: cacheHits + (naked?.cacheHits ?? 0),
-      elapsedMs: Math.round(now() - startedAt), searchLimited: limited || budgetLimited || !!naked?.searchLimited } : null;
+      exhaustiveSearch: exhaustive, searchExhausted: exhausted, enumeratedCombinations: exhaustiveLineups,
+      elapsedMs: Math.round(now() - startedAt), searchLimited: exhaustive ? false : limited || budgetLimited || !!naked?.searchLimited } : null;
   }
   function improveModifiers(engine, settings, kp, effects, plan, inventory, config) {
     const core = { ...engine.newSettings(), ...settings.options.defaultCoreSettings };
@@ -628,8 +679,10 @@
       throw Error('选卡底线必须介于 0 和开战底线之间。');
     if (!Number.isFinite(config.targetWinRate) || config.targetWinRate < config.minWinRate || config.targetWinRate > 1)
       throw Error('优化目标必须介于开战底线和 100% 之间。');
-    for (const k of ['maxBattles', 'searchRestarts', 'searchPasses', 'maxPredictions', 'maxModifierPredictions', 'modifierBeamWidth', 'maxJointPredictions'])
+    for (const k of ['maxBattles', 'searchRestarts', 'searchPasses', 'maxPredictions', 'maxModifierPredictions', 'modifierBeamWidth'])
       if (!Number.isSafeInteger(config[k]) || config[k] < 1) throw Error(`${k} 必须为正整数。`);
+    if (config.maxJointPredictions !== Infinity && (!Number.isSafeInteger(config.maxJointPredictions) || config.maxJointPredictions < 1))
+      throw Error('maxJointPredictions 必须为正整数或 Infinity。');
     if (config.maxModifiersPerBattle !== Infinity && (!Number.isSafeInteger(config.maxModifiersPerBattle) || config.maxModifiersPerBattle < 0))
       throw Error('maxModifiersPerBattle 必须为非负整数或 Infinity。');
     if (!Number.isFinite(config.minModifierGain) || config.minModifierGain < 0) throw Error('minModifierGain 必须为非负数。');
@@ -725,8 +778,9 @@
       stageId, choice.plan, config.minWinRate, allowLowWinRate, config.minSelectionWinRate);
   }
   function printPlan(kp, plan) {
-    log(`节点 ${kp.name ?? kp.id}：预计击败 ${plan.expected.toFixed(2)} 个敌人，搜索 ${plan.predictions} 个阵容。`);
+    log(`节点 ${kp.name ?? kp.id}：预计击败 ${plan.expected.toFixed(2)} 个敌人，${plan.exhaustiveSearch ? `完整搜索检查 ${plan.enumeratedCombinations} 个合法组合` : `搜索 ${plan.predictions} 个阵容`}。`);
     if (plan.jointPredictions) log(`评估 ${plan.jointPredictions} 个卡牌与增益品组合，耗时 ${plan.elapsedMs ?? 0}ms，复用 ${plan.cacheHits ?? 0} 次预测${plan.searchLimited ? '（达到搜索上限，保留已找到的最佳组合）' : ''}。`);
+    if (plan.exhaustiveSearch) log(plan.searchExhausted ? '当前卡牌与库存的合法组合已全部检查，返回最佳方案。' : '无限制搜索已找到全部槽位达到优化目标的方案。');
     log(plan.cards.map((c, i) => `${i + 1}: ${c?.code ?? '空位'}${c ? ` / HP ${c.health} / 胜率 ${(plan.rates[i] * 100).toFixed(1)}%` : ''}`).join('\n'));
     if (plan.modifiers?.flat().length) log('拟配置增益品：' + plan.modifiers.map((m, i) => m.length ? `${i + 1}号位 ${m.join(' + ')}` : '').filter(Boolean).join('；'));
     else if (plan.modifierNote) log(plan.modifierNote);
@@ -747,7 +801,11 @@
       predictionContexts.set(key, new Map());
     }
     return optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
-      () => sleep(1), seedPlans, predictionContexts.get(key));
+      () => sleep(1), seedPlans, predictionContexts.get(key), progress => {
+        if (progress.phase === 'exhaustive') log(`节点 ${kp.name ?? kp.id} 未达到每格 ${config.targetWinRate * 100}%：开始无限制组合搜索，可点击“停止”。`);
+        else if (progress.phase === 'progress') log(`无限制搜索已评估 ${progress.evaluations} 个组合，当前最佳胜率：${progress.rates?.map(r => (r * 100).toFixed(1) + '%').join(' / ') ?? '暂无'}。`);
+        else if (progress.phase === 'exhausted') log('合法组合已全部检查；将按原有规则评估补给或保留最佳阵容。');
+      });
   }
   async function menu(final = false) {
     if (!config.returnToMenu) return;
@@ -986,7 +1044,7 @@
   shadow.innerHTML = `<style>:host{color:#e8eff5;font:13px/1.5 system-ui}section{background:#102132;border:1px solid #67849d;border-radius:10px;padding:14px;box-shadow:0 8px 35px #0008}h3{margin:0 0 8px}button{padding:7px 10px;margin:3px;border:0;border-radius:5px;cursor:pointer;background:#dce7ed;color:#102132}pre{font:12px/1.5 system-ui;white-space:pre-wrap;max-height:280px;overflow:auto;margin-bottom:0}.note{color:#b4c6d6;font-size:12px}</style><section><h3>Pacific Front 自动游玩</h3><div class="note">优先满四槽 · 单槽开战底线80% · 增益品用量不限</div><button id="preview">仅预览</button><button id="run">开始运行</button><button id="stop">停止</button><button id="hide">收起</button><pre></pre></section>`;
   ui = shadow.querySelector('pre');
   shadow.querySelector('h3').textContent = `Pacific Front 自动游玩 v${SCRIPT_VERSION}`;
-  shadow.querySelector('.note').textContent = '选卡目标80% · 每格90%才开战 · 尽量每格100% · 增益品按需不限量';
+  shadow.querySelector('.note').textContent = '选卡目标80% · 每格90%才开战 · 目标100% · 高难关无限制搜索';
   shadow.querySelector('#preview').onclick = () => start('preview');
   const fillButton = document.createElement('button');
   fillButton.textContent = '自动选卡';
