@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pacific Front 自动排阵与游玩
 // @namespace    local.pacific-front
-// @version      1.9.0
+// @version      1.9.2
 // @description  使用页面原有预测引擎，自动进行当前行动；支持只读预览和停止。
 // @match        https://pacificfront.worldofwarships.asia/*
 // @match        https://pacificfront.worldofwarships.eu/*
@@ -13,7 +13,7 @@
 
 (function (root) {
   'use strict';
-  const SCRIPT_VERSION = '1.9.0';
+  const SCRIPT_VERSION = '1.9.2';
   const VERSION = 'ad60d10b';
   // Region coverage checked against abab-114514/wws-script at e98f5f08b5b04e1d2e014dc4b035aa02edc23d1b.
   const ALLOWED_ORIGINS = Object.freeze(['https://pacificfront.worldofwarships.asia',
@@ -406,9 +406,13 @@
       }
       if (limited) break;
     }
-    if (config.unlimitedHardSearch && !perfect() && pool.length) {
+    // A gap below the selection floor triggers exhaustive search. Missing the 100%
+    // optimization target alone must not extend a valid 80%+ draft indefinitely.
+    if (config.unlimitedHardSearch && !best?.selectionSafe && pool.length) {
       exhaustive = true; limited = false; budgetLimited = false; restartExhausted = false;
-      onProgress({ phase: 'exhaustive', evaluations: predictions, elapsedMs: Math.round(now() - startedAt), rates: best?.rates });
+      // Await draft placement before enumerating; callbacks never submit a battle.
+      await onProgress({ phase: 'exhaustive', evaluations: predictions, elapsedMs: Math.round(now() - startedAt), rates: best?.rates, plan: best });
+      checkpoint();
       // Every legal full fleet (or every maximum-occupancy partial fleet when short of
       // cards), every ordering and every legal allocation of both modifier groups.
       // No assumption about independent slots is valid: effects can cross the board.
@@ -443,13 +447,15 @@
         const pause = cooperate(); if (pause) await pause;
         if (now() - lastProgress >= 3000) {
           lastProgress = now();
-          onProgress({ phase: 'progress', evaluations: predictions, elapsedMs: Math.round(now() - startedAt), rates: best?.rates });
+          await onProgress({ phase: 'progress', evaluations: predictions, elapsedMs: Math.round(now() - startedAt), rates: best?.rates, plan: best });
+          checkpoint();
         }
         if (perfect()) break;
       }
       exhausted = !perfect();
-      onProgress({ phase: exhausted ? 'exhausted' : 'target', evaluations: predictions,
-        elapsedMs: Math.round(now() - startedAt), rates: best?.rates });
+      await onProgress({ phase: exhausted ? 'exhausted' : 'target', evaluations: predictions,
+        elapsedMs: Math.round(now() - startedAt), rates: best?.rates, plan: best });
+      checkpoint();
     }
     // Remove items only when doing so preserves the chosen probability quality.
     if (config.preferNoModifiers && best?.safe) {
@@ -785,7 +791,7 @@
     if (plan.modifiers?.flat().length) log('拟配置增益品：' + plan.modifiers.map((m, i) => m.length ? `${i + 1}号位 ${m.join(' + ')}` : '').filter(Boolean).join('；'));
     else if (plan.modifierNote) log(plan.modifierNote);
   }
-  async function planKeypoint(op, kp, inventory, seedPlans = []) {
+  async function planKeypoint(op, kp, inventory, seedPlans = [], showSearchDraft = false) {
     const settings = root.defaultState.settings;
     const effects = effectPayloads(op, kp, settings.options.appliedEffectsCancelableClearThreshold ?? 1);
     const candidates = availableCards(settings.collection.cards, inventory, activeStage(op), effects);
@@ -800,11 +806,22 @@
       if (predictionContexts.size >= 3) predictionContexts.delete(predictionContexts.keys().next().value);
       predictionContexts.set(key, new Map());
     }
+    let displayedDraft = '';
     return optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
-      () => sleep(1), seedPlans, predictionContexts.get(key), progress => {
-        if (progress.phase === 'exhaustive') log(`节点 ${kp.name ?? kp.id} 未达到每格 ${config.targetWinRate * 100}%：开始无限制组合搜索，可点击“停止”。`);
+      () => sleep(1), seedPlans, predictionContexts.get(key), async progress => {
+        if (progress.phase === 'exhaustive') log(`节点 ${kp.name ?? kp.id} 常规排阵后仍有对战槽位低于 ${config.minSelectionWinRate * 100}%：开始无限制组合搜索，可点击“停止”。`);
         else if (progress.phase === 'progress') log(`无限制搜索已评估 ${progress.evaluations} 个组合，当前最佳胜率：${progress.rates?.map(r => (r * 100).toFixed(1) + '%').join(' / ') ?? '暂无'}。`);
         else if (progress.phase === 'exhausted') log('合法组合已全部检查；将按原有规则评估补给或保留最佳阵容。');
+        // Only real inventory planning may change the board. Read-only previews and
+        // purchase simulations must never place hypothetical cards or modifiers.
+        if (!showSearchDraft || !progress.plan) return;
+        const draftKey = JSON.stringify([progress.plan.cards.map(c => c?.code ?? null), progress.plan.modifiers]);
+        if (draftKey === displayedDraft) return;
+        const checked = await recheck(op.id, activeStage(op).id, { kp, plan: progress.plan }, true);
+        if (checked.reason) throw Error(`搜索草稿复核未通过：${checked.reason}。请重新运行。`);
+        await syncBoard(op.id, checked.kp, checked.plan, true);
+        displayedDraft = draftKey;
+        log('已填入搜索中的当前最佳卡牌及增益品；搜索期间不提交战斗。');
       });
   }
   async function menu(final = false) {
@@ -977,7 +994,7 @@
         if (finished(kp) || kp.status === 'in_processing') continue;
         if (!['revealed', 'unrevealed'].includes(kp.status)) throw Error('未知节点状态：' + kp.status);
         log(`计算节点 ${kp.name ?? kp.id} 的阵容…`);
-        const plan = await planKeypoint(op, kp, inventory);
+        const plan = await planKeypoint(op, kp, inventory, [], !preview);
         if (plan && plan.cards.some(Boolean)) {
           if (!choice || comparePlans(plan, choice.plan, config) < 0) choice = { kp, plan };
         }
@@ -1044,7 +1061,7 @@
   shadow.innerHTML = `<style>:host{color:#e8eff5;font:13px/1.5 system-ui}section{background:#102132;border:1px solid #67849d;border-radius:10px;padding:14px;box-shadow:0 8px 35px #0008}h3{margin:0 0 8px}button{padding:7px 10px;margin:3px;border:0;border-radius:5px;cursor:pointer;background:#dce7ed;color:#102132}pre{font:12px/1.5 system-ui;white-space:pre-wrap;max-height:280px;overflow:auto;margin-bottom:0}.note{color:#b4c6d6;font-size:12px}</style><section><h3>Pacific Front 自动游玩</h3><div class="note">优先满四槽 · 单槽开战底线80% · 增益品用量不限</div><button id="preview">仅预览</button><button id="run">开始运行</button><button id="stop">停止</button><button id="hide">收起</button><pre></pre></section>`;
   ui = shadow.querySelector('pre');
   shadow.querySelector('h3').textContent = `Pacific Front 自动游玩 v${SCRIPT_VERSION}`;
-  shadow.querySelector('.note').textContent = '选卡目标80% · 每格90%才开战 · 目标100% · 高难关无限制搜索';
+  shadow.querySelector('.note').textContent = '排阵后低于80%才无限搜索 · 每格90%才开战 · 优化目标100%';
   shadow.querySelector('#preview').onclick = () => start('preview');
   const fillButton = document.createElement('button');
   fillButton.textContent = '自动选卡';
