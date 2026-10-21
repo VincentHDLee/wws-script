@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Pacific Front 自动排阵与游玩 (用多不用少与空仓提醒版)
+// @name         Pacific Front 自动排阵与游玩 (四阶双拼攻坚与煤炭战略确权版)
 // @namespace    local.pacific-front
-// @version      2.3.1
-// @description  大洋战线阶段最优规划；30舰全图鉴精准双语、五星高难适配、道具用多不用少、白道具空仓温馨提示手动买15个(禁自动扣款)、空仓裸卡优先、关底全黄卡压上与代币定向加速。
+// @version      2.6.0
+// @description  大洋战线阶段最优规划；四阶SOP双插槽合体攻坚、煤炭战略资源95%确权、无损去冗杜绝绿道具滥用、全图鉴九阶防溢出升序枚举、单槽独立精算。
 // @match        https://pacificfront.worldofwarships.asia/*
 // @match        https://pacificfront.worldofwarships.eu/*
 // @match        https://pacificfront.worldofwarships.com/*
@@ -13,7 +13,7 @@
 
 (function (root) {
   'use strict';
-  const SCRIPT_VERSION = '2.3.1';
+  const SCRIPT_VERSION = '2.6.0';
   const VERSION = 'ad60d10b';
   const ALLOWED_ORIGINS = Object.freeze([
     'https://pacificfront.worldofwarships.asia',
@@ -44,7 +44,7 @@
   const defaults = Object.freeze({
     minSelectionWinRate: 0.80, minWinRate: 0.90, targetWinRate: 1, maxBattles: 30, delayMs: 1000,
     searchRestarts: 6, searchPasses: 3, maxPredictions: 12000, syncPage: true,
-    fillAllSlots: true, useModifiers: true, autoBuy: false, // 严格禁止自动扣款购买
+    fillAllSlots: true, useModifiers: true, autoBuy: false,
     minModifierGain: 0, maxModifiersPerBattle: Infinity, maxModifierPredictions: 12000,
     modifierBeamWidth: 16, maxJointPredictions: 60000, maxSearchMs: 4000, unlimitedHardSearch: true,
     preferNoModifiers: true, returnToMenu: true,
@@ -117,14 +117,29 @@
   };
 
   const BILINGUAL_MODS = {
-    repair: '战地维修 / Field Repair',
-    specialization: '专业强化 / Specialization',
-    rudder: '舵效培训 / Rudder Training',
-    token: '效率提升 / Progress Booster',
-    effectiveness: '效率提升 / Progress Booster',
-    attack: '火力增强 / Firepower Boost',
-    defense: '装甲强化 / Armor Reinforcement',
-    focused: '专注打击 / Focused Strike'
+    gunnery: '炮术训练 / Gunnery Training',
+    artillery: '炮术训练 / Gunnery Training',
+    attack: '炮术训练 / Gunnery Training',
+    damage_control: '损管训练 / Damage Control Training',
+    defense: '损管训练 / Damage Control Training',
+    helmsman: '舵手训练 / Helmsman Training',
+    rudder: '舵手训练 / Helmsman Training',
+    teamwork: '团队协作 / Teamwork',
+    cooperation: '团队协作 / Teamwork',
+    token: '效率 / Progress Booster',
+    effectiveness: '效率 / Progress Booster',
+    efficiency: '效率 / Progress Booster',
+    morale: '士气打击 / Morale Impact',
+    moral: '士气打击 / Morale Impact',
+    focus: '专注 / Focus',
+    focused: '专注 / Focus',
+    specialization: '专精 / Specialization',
+    specialty: '专精 / Specialization',
+    old_salt: '老水手 / Old Salt',
+    veteran: '老水手 / Veteran Sailor',
+    repair: '快速维修 / Quick Repair',
+    unstoppable: '势不可挡 / Unstoppable',
+    relentless: '势不可挡 / Relentless'
   };
 
   function formatCardName(c) {
@@ -147,13 +162,22 @@
     return id;
   }
 
+  // --- 【30/30 盟军全舰艇：白/蓝/黄九阶绝对硬分档】 ---
   function getCardColor(c) {
-    if (!c) return { label: '空位', tierGroup: 'none', weight: 0 };
+    if (!c) return { label: '空位', tierGroup: 'none', weight: 0, rank: 0 };
     const p = power(c);
-    if (p >= 170) return { label: '核心黄/Yellow', tierGroup: 'yellow', weight: 300 };
-    if (p >= 130) return { label: '中阶蓝/Blue', tierGroup: 'blue', weight: 30 };
-    if (p >= 106) return { label: '高级白/Adv White', tierGroup: 'adv_white', weight: 5 };
-    return { label: '基础白/Base White', tierGroup: 'base_white', weight: 1 };
+
+    if (p >= 195) return { label: '高级黄/Adv Yellow (190-210+)', tierGroup: 'adv_yellow', weight: 800, rank: 9 };
+    if (p >= 185) return { label: '中级黄/Mid Yellow (180-200)', tierGroup: 'mid_yellow', weight: 500, rank: 8 };
+    if (p >= 168) return { label: '基础黄/Base Yellow (170-190)', tierGroup: 'base_yellow', weight: 300, rank: 7 };
+
+    if (p >= 152) return { label: '高级蓝/Adv Blue (145-165)', tierGroup: 'adv_blue', weight: 80, rank: 6 };
+    if (p >= 142) return { label: '中级蓝/Mid Blue (135-155/140-160)', tierGroup: 'mid_blue', weight: 50, rank: 5 };
+    if (p >= 128) return { label: '基础蓝/Base Blue (130-150)', tierGroup: 'base_blue', weight: 30, rank: 4 };
+
+    if (p >= 110) return { label: '高级白/Adv White (105-125)', tierGroup: 'adv_white', weight: 6, rank: 3 };
+    if (p >= 102) return { label: '中级白/Mid White (95-115)', tierGroup: 'mid_white', weight: 3, rank: 2 };
+    return { label: '基础白/Base White (90-110)', tierGroup: 'base_white', weight: 1, rank: 1 };
   }
 
   function calcSingleCardCost(c) {
@@ -173,7 +197,7 @@
     if (!stage) return false;
     const stages = op.stages ?? [];
     const isLastStage = stages.length > 0 && stages[stages.length - 1]?.id === stage.id;
-    return isLastStage && slots(kp).some(s => isEpicBoss(s?.enemy) || isCommonBoss(s?.enemy) || String(s?.enemy?.code).includes('boss'));
+    return isLastStage && slots(kp).some(s => isEpicBoss(s?.enemy) || String(s?.enemy?.code).includes('boss'));
   }
 
   function getKeypointThreat(kp) {
@@ -186,33 +210,54 @@
   }
 
   function parseSlotReward(slot) {
-    if (!slot) return { type: 'unknown', amount: 0, label: '无目标', isRepairDrop: false };
-    const jsonStr = JSON.stringify(slot).toLowerCase();
-    const isRepairDrop = jsonStr.includes('repair') || jsonStr.includes('维修') || jsonStr.includes('wrench');
+    if (!slot) return { type: 'unknown', amount: 0, label: '无目标', isRepairDrop: false, isTokenDrop: false };
 
-    const tokenMatch = jsonStr.match(/(?:amount|count|value|total|quantity)["':\s]+(\d{3,5})/);
-    if (jsonStr.includes('3960') || jsonStr.includes('3200') || jsonStr.includes('3080') || jsonStr.includes('2800') || isEpicBoss(slot?.enemy) || String(slot?.enemy?.code).includes('boss')) {
-      const amt = Number(tokenMatch?.[1] ?? 2800);
-      return { type: 'token', amount: amt, label: `👑${amt}代币`, isRepairDrop };
+    const rewardData = slot.reward ?? slot.rewards ?? slot.drop ?? slot.drops ??
+      (() => { const c = { ...slot }; delete c.enemy; delete c.ally; return c; })();
+
+    const jsonStr = JSON.stringify(rewardData).toLowerCase();
+    const amtMatch = jsonStr.match(/(?:amount|count|value|total|quantity)["':\s]+(\d+)/);
+    const amt = Number(amtMatch?.[1] ?? 0);
+
+    // 1. 快速维修包
+    if (jsonStr.includes('repair') || jsonStr.includes('维修') || jsonStr.includes('wrench')) {
+      return { type: 'repair', amount: amt || 2, label: '🔧快速维修包', isRepairDrop: true, isTokenDrop: false };
     }
-    if (jsonStr.includes('1045') || jsonStr.includes('935') || jsonStr.includes('660') || jsonStr.includes('600')) {
-      const amt = Number(tokenMatch?.[1] ?? 600);
-      return { type: 'token', amount: amt, label: `👑${amt}代币`, isRepairDrop };
+
+    // 2. 煤炭 (战略硬通货)
+    if (jsonStr.includes('coal') || jsonStr.includes('煤炭')) {
+      return { type: 'coal', amount: amt, label: `💎${amt || ''}煤炭`, isRepairDrop: false, isTokenDrop: false };
     }
-    if (tokenMatch && Number(tokenMatch[1]) >= 100) {
-      const amt = Number(tokenMatch[1]);
-      return { type: 'token', amount: amt, label: `👑${amt}代币`, isRepairDrop };
+
+    // 3. 经验家族
+    if (jsonStr.includes('xp') || jsonStr.includes('exp') || jsonStr.includes('commander') ||
+        jsonStr.includes('crew') || jsonStr.includes('elite') || jsonStr.includes('经验')) {
+      const isCommander = jsonStr.includes('commander') || jsonStr.includes('crew') || jsonStr.includes('elite') || jsonStr.includes('指挥官');
+      const labelText = isCommander ? `⭐${amt || ''}精英指挥官经验` : `⭐${amt || ''}全局经验`;
+      return { type: 'exp', amount: amt, label: labelText, isRepairDrop: false, isTokenDrop: false };
     }
-    if (jsonStr.includes('eventum') || jsonStr.includes('progress_token')) {
-      return { type: 'token', amount: 100, label: '👑进度代币', isRepairDrop };
+
+    // 4. 银币 (credits / silver)
+    if (jsonStr.includes('credits') || jsonStr.includes('silver') || jsonStr.includes('银币')) {
+      return { type: 'silver', amount: amt, label: `🪙${amt || ''}银币`, isRepairDrop: false, isTokenDrop: false };
     }
-    if (isRepairDrop) {
-      return { type: 'item', amount: 1, label: '🔧修船包奖励', isRepairDrop: true };
+
+    // 5. 简章 / 图纸 / 蓝图
+    if (jsonStr.includes('blueprint') || jsonStr.includes('图纸') || jsonStr.includes('简章') || jsonStr.includes('drawing')) {
+      return { type: 'blueprint', amount: amt, label: `📘${amt || ''}简章图纸`, isRepairDrop: false, isTokenDrop: false };
     }
+
+    // 6. 特殊修改器
     if (jsonStr.includes('modifier') || jsonStr.includes('item') || jsonStr.includes('ticket')) {
-      return { type: 'item', amount: 1, label: '⚔️道具奖励', isRepairDrop: false };
+      return { type: 'item', amount: 1, label: '⚔️特殊修改器', isRepairDrop: false, isTokenDrop: false };
     }
-    return { type: 'supply', amount: 1, label: '⚓舰队补给', isRepairDrop: false };
+
+    // 7. 进度代币 (数额 >= 100)
+    if (amt >= 100) {
+      return { type: 'token', amount: amt, label: `👑${amt}进度代币`, isRepairDrop: false, isTokenDrop: true };
+    }
+
+    return { type: 'supply', amount: amt || 1, label: `⚓${amt || ''}舰队补给`, isRepairDrop: false, isTokenDrop: false };
   }
 
   function getSlotTargetRate(slot) {
@@ -225,12 +270,11 @@
     const isYellow = !isRed && (isCommonBoss(enemy) || enemy.tier === 3 || p >= 150);
 
     if (rewardInfo.type === 'token') return 1.0;
-    if (rewardInfo.isRepairDrop) return 0.95;
+    if (rewardInfo.isRepairDrop || rewardInfo.type === 'coal') return 0.95; // 修船包与煤炭 95% 绝不翻车
     if (isRed) return 1.0;
     if (isYellow) return 0.90;
-    if (rewardInfo.type === 'item') return 0.85;
-    if (rewardInfo.type === 'supply') return 0.80;
-
+    if (rewardInfo.type === 'blueprint' || rewardInfo.type === 'item') return 0.85;
+    if (rewardInfo.type === 'silver' || rewardInfo.type === 'exp') return 0.85;
     return 0.80;
   }
 
@@ -379,25 +423,51 @@
     };
   }
 
-  function isWhiteModifier(mId, collectionModifiers) {
-    const mod = (collectionModifiers ?? []).find(m => m.id === mId);
-    return Boolean(mod?.price);
-  }
-
-  function isRepairModifier(mId, collectionModifiers) {
+  function getModInfo(mId, collectionModifiers) {
     const mod = (collectionModifiers ?? []).find(m => m.id === mId);
     const text = `${mod?.id ?? ''} ${mod?.name ?? ''} ${mod?.description ?? ''} ${(mod?.tags ?? []).join(' ')}`.toLowerCase();
-    return text.includes('repair') || text.includes('维修') || text.includes('恢复') || text.includes('heal');
+    const isWhite = Boolean(mod?.price);
+
+    const isToken = text.includes('token') || text.includes('progress') || text.includes('代币') ||
+                    text.includes('进度') || text.includes('effectiveness') || text.includes('efficiency') ||
+                    text.includes('效率') || JSON.stringify(mod?.price ?? '').includes('18');
+
+    const isTeamwork = text.includes('teamwork') || text.includes('cooperation') || text.includes('团队协作');
+    const isMorale = text.includes('moral') || text.includes('士气');
+    const isRepair = text.includes('repair') || text.includes('维修') || text.includes('恢复') || text.includes('wrench');
+    const isUnstoppable = text.includes('unstoppable') || text.includes('relentless') || text.includes('势不可挡');
+    const isFocus = text.includes('focus') || text.includes('专注');
+    const isSpec = text.includes('specializ') || text.includes('专精');
+    const isOldSalt = text.includes('old_salt') || text.includes('veteran') || text.includes('sailor') || text.includes('老水手');
+
+    const isBaseWhiteCombat = isWhite && !isToken && !isMorale && !isRepair && !isTeamwork;
+    const isGreenSpecial = !isWhite && (isRepair || isUnstoppable || isFocus || isSpec || isOldSalt);
+
+    return { mod, isWhite, isToken, isMorale, isTeamwork, isRepair, isUnstoppable, isFocus, isSpec, isOldSalt, isBaseWhiteCombat, isGreenSpecial };
   }
 
   function findTokenBooster(collectionModifiers) {
-    for (const m of collectionModifiers ?? []) {
-      const text = `${m.id ?? ''} ${m.name ?? ''} ${m.description ?? ''} ${(m.tags ?? []).join(' ')}`.toLowerCase();
-      if ((text.includes('token') || text.includes('progress') || text.includes('代币') || text.includes('进度') || text.includes('effectiveness') || text.includes('效率')) && m.price) {
-        return m;
-      }
+    return (collectionModifiers ?? []).find(m => getModInfo(m.id, collectionModifiers).isToken && m.price) ?? null;
+  }
+
+  function slotReceivesIncomingBuff(cards, slotIdx) {
+    if (slotIdx > 0 && cards[slotIdx - 1]) {
+      const leftCard = cards[slotIdx - 1];
+      const hasRightBuff = (leftCard.buffs ?? []).some(b => {
+        const d = String(b.direction).toLowerCase();
+        return d === 'right' || d === '1' || d === 'east' || d === 'r';
+      });
+      if (hasRightBuff) return true;
     }
-    return (collectionModifiers ?? []).find(m => m.price && String(m.id).toLowerCase().includes('token')) ?? null;
+    if (slotIdx < 3 && cards[slotIdx + 1]) {
+      const rightCard = cards[slotIdx + 1];
+      const hasLeftBuff = (rightCard.buffs ?? []).some(b => {
+        const d = String(b.direction).toLowerCase();
+        return d === 'left' || d === '3' || d === 'west' || d === 'l';
+      });
+      if (hasLeftBuff) return true;
+    }
+    return false;
   }
 
   function comparePlans(a, b, config, context) {
@@ -408,8 +478,8 @@
     }
 
     if (!isFinalBoss && Number.isFinite(maxYMaxAllowed)) {
-      const aYellow = a.cards.filter(c => c && getCardColor(c).tierGroup === 'yellow').length;
-      const bYellow = b.cards.filter(c => c && getCardColor(c).tierGroup === 'yellow').length;
+      const aYellow = a.cards.filter(c => c && getCardColor(c).rank >= 7).length;
+      const bYellow = b.cards.filter(c => c && getCardColor(c).rank >= 7).length;
       const aOver = aYellow > maxYMaxAllowed;
       const bOver = bYellow > maxYMaxAllowed;
       if (aOver !== bOver) return aOver ? 1 : -1;
@@ -423,71 +493,54 @@
       if (slotDiff !== 0) return slotDiff;
     }
 
-    if (a.safe && b.safe) {
-      if (isFinalBoss) {
-        const countGreenMods = plan => (plan.modifiers ?? []).flat().filter(id => !isWhiteModifier(id, context.collectionMods)).length;
-        const greenA = countGreenMods(a);
-        const greenB = countGreenMods(b);
-        if (greenA !== greenB) return greenA - greenB;
+    const aMods = a.modifiers?.flat().length ?? 0;
+    const bMods = b.modifiers?.flat().length ?? 0;
 
-        const bId = findTokenBooster(context.collectionMods)?.id;
-        const nonTokenA = (a.modifiers ?? []).flat().filter(id => id !== bId).length;
-        const nonTokenB = (b.modifiers ?? []).flat().filter(id => id !== bId).length;
-        if (nonTokenA !== nonTokenB) return nonTokenA - nonTokenB;
-
-        const totalPowerA = a.cards.reduce((sum, c) => sum + power(c), 0);
-        const totalPowerB = b.cards.reduce((sum, c) => sum + power(c), 0);
-        if (totalPowerB !== totalPowerA) return totalPowerB - totalPowerA;
-
-        return (b.weakestRate ?? 0) - (a.weakestRate ?? 0);
-      }
-
-      // 普通据点：裸卡优先，成本最低优先
-      const aMods = a.modifiers?.flat().length ?? 0;
-      const bMods = b.modifiers?.flat().length ?? 0;
-      if (aMods === 0 && bMods > 0) return -1;
-      if (bMods === 0 && aMods > 0) return 1;
-
-      // 【用多不用少】：如果都带了道具，优先使用库存充裕的道具
-      if (context.stock) {
-        const getStockSum = plan => (plan.modifiers ?? []).flat().reduce((s, id) => s + (context.stock.get(id) ?? 0), 0);
-        const stockA = getStockSum(a);
-        const stockB = getStockSum(b);
-        if (stockA !== stockB) return stockB - stockA;
-      }
-
-      const calcCost = plan => {
-        let cardCost = plan.cards.reduce((sum, c) => sum + calcSingleCardCost(c), 0);
-        let modCost = 0;
-        for (const mList of plan.modifiers ?? []) {
-          for (const mId of mList) {
-            if (isRepairModifier(mId, context.collectionMods)) modCost += 50000;
-            else if (isWhiteModifier(mId, context.collectionMods)) modCost += 1000;
-            else modCost += 200000;
-          }
+    const calcModTierCost = plan => {
+      let cost = 0;
+      for (const mList of plan.modifiers ?? []) {
+        for (const mId of mList) {
+          const info = getModInfo(mId, context.collectionMods);
+          if (info.isToken) cost += 1000;
+          else if (info.isBaseWhiteCombat || info.isTeamwork) cost += 2000;
+          else if (info.isGreenSpecial) cost += 10000;
         }
-        return cardCost + modCost;
-      };
+      }
+      return cost;
+    };
+    const costDiff = calcModTierCost(a) - calcModTierCost(b);
 
-      const costA = calcCost(a), costB = calcCost(b);
-      if (Math.abs(costA - costB) > 0.1) return costA - costB;
-
+    if (a.safe && b.safe) {
       if (aMods !== bMods) return aMods - bMods;
+      if (Math.abs(costDiff) > 0.1) return costDiff;
+
+      if (context.stock && aMods > 0) {
+        const getStockSum = plan => (plan.modifiers ?? []).flat().reduce((s, id) => s + (context.stock.get(id) ?? 0), 0);
+        const stockDiff = getStockSum(b) - getStockSum(a);
+        if (stockDiff !== 0) return stockDiff;
+      }
+
+      const cardCostA = a.cards.reduce((sum, c) => sum + calcSingleCardCost(c), 0);
+      const cardCostB = b.cards.reduce((sum, c) => sum + calcSingleCardCost(c), 0);
+      if (Math.abs(cardCostA - cardCostB) > 0.1) return cardCostA - cardCostB;
 
       const rateDiff = (b.weakestRate ?? 0) - (a.weakestRate ?? 0);
       if (Math.abs(rateDiff) > 0.001) return rateDiff;
     }
 
+    // 未完全达标状态下：同等缺口下道具越少越优，杜绝滥用
     const defDiff = a.battleDeficit - b.battleDeficit;
     if (Math.abs(defDiff) > 0.05) return defDiff;
+    if (aMods !== bMods) return aMods - bMods;
+    if (Math.abs(costDiff) > 0.1) return costDiff;
 
     return b.expected - a.expected || (b.weakestRate ?? 0) - (a.weakestRate ?? 0) || b.score - a.score;
   }
 
-  // --- 智能搜索引擎（道具用多不用少，空仓自然裸卡出战） ---
+  // --- 【搜索引擎：支持 Stage 4 dual 双插槽合体】 ---
   async function optimizeJoint(engine, settings, kp, candidates, effects, inventory, config,
       checkpoint, yieldUI, seedPlans = [], rateCache = new Map(), onProgress = () => {}, context = {}) {
-    const { isFinalBoss, allowWhiteMods } = context;
+    const { isFinalBoss, searchMode } = context; // 'bare' | 'white' | 'green' | 'dual'
     const now = () => typeof performance === 'object' ? performance.now() : Date.now();
     const startedAt = now(), deadline = startedAt + (config.maxSearchMs ?? 4000);
     checkpoint();
@@ -498,34 +551,10 @@
     const disabled = !config.useModifiers || effects.some(e => e.type === 5);
     const restricted = new Set(effects.filter(e => e.type === 6).flatMap(e => e.restrictions?.modifiers ?? []));
 
-    const isModAllowedInSearch = id => {
-      if (disabled || restricted.has(id)) return false;
-      const isWhite = isWhiteModifier(id, settings.collection.modifiers);
-      const isRep = isRepairModifier(id, settings.collection.modifiers);
-
-      if (isRep) return false;
-      if (isFinalBoss) return !isWhite;
-      if (!isWhite) return false;
-      return Boolean(allowWhiteMods);
-    };
-
-    // 道具按库存降序探索，库存为0的白色道具自然排除（由裸卡优先替代）
-    const groups = [1, 2].map(type => [
-      null,
-      ...[...stock]
-        .filter(([id, count]) => count > 0 && isModAllowedInSearch(id) && attrs[id]?.Type === type)
-        .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
-        .map(([id]) => id)
-    ]);
-    const allocations = groups[0].flatMap(a => groups[1].map(b => [a, b].filter(Boolean)));
-
     const pool = [...candidates].sort((a, b) => {
-      if (isFinalBoss) {
-        return power(b) - power(a) || a.code.localeCompare(b.code);
-      }
-      const costA = calcSingleCardCost(a);
-      const costB = calcSingleCardCost(b);
-      return costA - costB || power(a) - power(b);
+      const rankA = getCardColor(a).rank, rankB = getCardColor(b).rank;
+      if (rankA !== rankB) return rankA - rankB;
+      return power(a) - power(b);
     });
 
     const byCode = new Map(pool.map(c => [c.code, c]));
@@ -535,6 +564,80 @@
     const preparedPredict = createPredictor(engine, core, kp, effects);
     let cacheHits = 0;
     const emptyMods = () => [[], [], [], []];
+
+    function getSlotModifierAllocations(cards, slotIdx) {
+      if (disabled) return [[]];
+      const card = cards[slotIdx];
+      if (!card) return [[]];
+
+      const slotObj = slots(kp)[slotIdx];
+      const reward = parseSlotReward(slotObj);
+
+      // 代币槽位：基准是 [效率]，白插槽锁定，不足时绿插槽挂绿增益
+      if (reward.type === 'token') {
+        const booster = findTokenBooster(settings.collection.modifiers);
+        const boosterId = booster?.id;
+        const hasBooster = boosterId && (stock.get(boosterId) ?? 0) > 0;
+        const baseAlloc = hasBooster ? [boosterId] : [];
+
+        if (searchMode === 'bare' || searchMode === 'white' || !hasBooster) {
+          return [baseAlloc];
+        }
+
+        const greenMods = [...stock]
+          .filter(([id, count]) => count > 0 && !restricted.has(id) && attrs[id]?.Type === 2 && getModInfo(id, settings.collection.modifiers).isGreenSpecial)
+          .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+          .map(([id]) => id);
+
+        return [baseAlloc, ...greenMods.map(gId => [...baseAlloc, gId])];
+      }
+
+      // 非代币槽位 (煤炭、修船、常规敌人)
+      if (searchMode === 'bare') return [[]];
+
+      const receivesBuff = slotReceivesIncomingBuff(cards, slotIdx);
+
+      const whiteMods = [...stock]
+        .filter(([id, count]) => {
+          if (count <= 0 || restricted.has(id) || attrs[id]?.Type !== 1) return false;
+          const info = getModInfo(id, settings.collection.modifiers);
+          if (info.isToken || info.isMorale) return false;
+          if (info.isBaseWhiteCombat) return true;
+          if (info.isTeamwork) return receivesBuff;
+          return false;
+        })
+        .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+        .map(([id]) => id);
+
+      if (searchMode === 'white') {
+        return [[], ...whiteMods.map(wId => [wId])];
+      }
+
+      const greenMods = [...stock]
+        .filter(([id, count]) => {
+          if (count <= 0 || restricted.has(id) || attrs[id]?.Type !== 2) return false;
+          const info = getModInfo(id, settings.collection.modifiers);
+          if (!info.isGreenSpecial) return false;
+          if (info.isRepair && card.health >= 3) return false;
+          return true;
+        })
+        .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+        .map(([id]) => id);
+
+      if (searchMode === 'green') {
+        return [[], ...whiteMods.map(wId => [wId]), ...greenMods.map(gId => [gId])];
+      }
+
+      // searchMode === 'dual': 四阶合体攻坚 (1白 + 1绿双拼)
+      const dualAllocs = [];
+      for (const wId of whiteMods.slice(0, 2)) {
+        for (const gId of greenMods.slice(0, 3)) {
+          dualAllocs.push([wId, gId]);
+        }
+      }
+
+      return [[], ...whiteMods.map(wId => [wId]), ...greenMods.map(gId => [gId]), ...dualAllocs];
+    }
 
     function evaluate(cards, modifiers) {
       const codes = cards.filter(Boolean).map(c => c.code);
@@ -585,7 +688,15 @@
       const usedIdx = new Set();
       function permute(pos) {
         if (pos === 4) {
-          evaluate(permCards, emptyMods());
+          const defaultMods = permCards.map((c, i) => {
+            const reward = parseSlotReward(slots(kp)[i]);
+            if (reward.type === 'token') {
+              const booster = findTokenBooster(settings.collection.modifiers);
+              return booster?.id ? [booster.id] : [];
+            }
+            return [];
+          });
+          evaluate(permCards, defaultMods);
           return;
         }
         for (let i = 0; i < pool.length; i++) {
@@ -597,16 +708,25 @@
         }
       }
       permute(0);
-      if (best?.safe) return best;
+      if (best?.safe && searchMode === 'bare') return best;
     }
+
+    const defaultSeedMods = () => Array.from({ length: 4 }, (_, i) => {
+      const reward = parseSlotReward(slots(kp)[i]);
+      if (reward.type === 'token') {
+        const booster = findTokenBooster(settings.collection.modifiers);
+        return booster?.id ? [booster.id] : [];
+      }
+      return [];
+    });
 
     const seeds = seedPlans.map(p => ({
       cards: p.cards.map(c => c ? byCode.get(c.code) ?? null : null),
-      modifiers: emptyMods()
+      modifiers: defaultSeedMods()
     }));
     for (let r = 0; r < config.searchRestarts; r++) seeds.push({
       cards: Array.from({ length: 4 }, (_, i) => i < pool.length ? pool[(i + r * 2) % pool.length] : null),
-      modifiers: emptyMods()
+      modifiers: defaultSeedMods()
     });
 
     const starts = seeds.map(s => evaluate(s.cards, s.modifiers)).filter(Boolean);
@@ -631,9 +751,13 @@
           let next = current;
           for (const card of pool) {
             if (current.cards.some((c, i) => i !== pos && c?.code === card.code)) continue;
-            for (const allocation of allocations) {
-              const cards = current.cards.slice(), mods = current.modifiers.map(a => a.slice());
-              cards[pos] = card; mods[pos] = allocation;
+            const tempCards = current.cards.slice();
+            tempCards[pos] = card;
+            const slotAllocations = getSlotModifierAllocations(tempCards, pos);
+
+            for (const allocation of slotAllocations) {
+              const cards = tempCards.slice(), mods = current.modifiers.map(a => a.slice());
+              mods[pos] = allocation;
               const candidate = evaluate(cards, mods);
               if (candidate && comparePlans(candidate, next, config, context) < 0) next = candidate;
               const pause = cooperate(); if (pause) await pause;
@@ -664,12 +788,6 @@
       ...best, predictions: lineups.size, jointPredictions: predictions, cacheHits,
       elapsedMs: Math.round(now() - startedAt)
     } : null;
-  }
-
-  function eventPrice(price, inventory, budget) {
-    if (!Array.isArray(price) || !price.length || price.some(p => p.type !== 'currency' || p.code !== 'eventum_1' || !Number.isFinite(p.amount) || p.amount <= 0)) return null;
-    const cost = price.reduce((n, p) => n + p.amount, 0);
-    return cost <= budget && cost <= (inventory.currencies?.eventum_1 ?? 0) ? cost : null;
   }
 
   function findPageBridge(doc) {
@@ -812,11 +930,10 @@
       }
       if (!bridge.store || bridge.store.getState().battleBoard?.activeKeypointId !== kp.id) return;
       placePageCards(bridge.store, id, kp, plan.cards, plan.modifiers, root.adeck.getModifiers?.() ?? {});
-      log('已自动选卡并填入页面棋盘。');
-      await sleep(500);
+      await sleep(300);
     } catch (error) {
       if (required) throw error;
-      log(`页面选卡同步：${error.message}`);
+      log(`页面选卡同步 [${kp.name ?? kp.id}]：${error.message}`);
     }
   }
 
@@ -842,7 +959,7 @@
       const rarity = getCardColor(c).label;
       const shipName = formatCardName(c);
       const mods = (plan.modifiers?.[i] ?? []).map(formatModifierName).join(' + ') || '无 / None (裸卡)';
-      const hpWarn = c.health === 1 ? ' ⚠️1 HP濒死' : '';
+      const hpWarn = c.health === 1 ? ' ⚠️1 HP濒死' : c.health === 2 ? ' ⚠️2 HP轻损' : '';
       const slotObj = kpSlots[i];
       const rewardInfo = parseSlotReward(slotObj);
       const targetPct = (getSlotTargetRate(slotObj) * 100).toFixed(0);
@@ -851,100 +968,90 @@
     });
   }
 
-  // --- 空仓温馨提示：严禁擅自扣款代买，温馨提示手动买 15 个 ---
-  function checkAndWarnWhiteModifierShortage(inventory, collectionModifiers) {
-    const stock = modifierCounts(inventory);
-    const lowStockItems = [];
-    (collectionModifiers ?? []).forEach(m => {
-      if (isWhiteModifier(m.id, collectionModifiers)) {
-        const count = stock.get(m.id) ?? 0;
-        if (count < 2) {
-          lowStockItems.push(formatModifierName(m.id));
-        }
-      }
-    });
-
-    if (lowStockItems.length > 0) {
-      log(`⚠️ [库存提示] 白色战力道具 [${lowStockItems.slice(0, 3).join('、')}${lowStockItems.length > 3 ? '等' : ''}] 储备偏低或空仓。建议手动前往商店每种各补购 15 个！当前将优先使用裸卡或库存充裕道具出战。`);
-    }
-  }
-
-  // --- EpicBoss 定向武装：仅使用现存库存，绝不自动扣款代买 ---
-  function equipTokenBoostersFromStock(op, choice, inventory) {
-    const settings = root.defaultState.settings;
-    const booster = findTokenBooster(settings.collection.modifiers);
-    if (!booster) return;
-
-    const boosterId = booster.id;
+  // --- 【无损去冗与清洁锁：杜绝多用绿道具与误挂】 ---
+  function enforceFinalModCleanliness(choice, engine, settings) {
     const kpSlots = slots(choice.kp);
-    const tokenSlotIndices = kpSlots.map((s, idx) => parseSlotReward(s).type === 'token' ? idx : -1).filter(idx => idx >= 0);
+    const effects = effectPayloads(choice.op, choice.kp, settings.options.appliedEffectsCancelableClearThreshold ?? 1);
+    const core = { ...engine.newSettings(), ...settings.options.defaultCoreSettings };
+    const predictor = createPredictor(engine, core, choice.kp, effects);
 
-    if (!tokenSlotIndices.length) return;
+    kpSlots.forEach((slot, idx) => {
+      if (!choice.plan.cards[idx]) return;
+      const reward = parseSlotReward(slot);
+      let mods = choice.plan.modifiers[idx] ?? [];
 
-    let counts = modifierCounts(inventory);
-    let currentStock = counts.get(boosterId) ?? 0;
-    const needed = tokenSlotIndices.length;
-
-    if (currentStock < needed) {
-      log(`⚠️ [代币道具提示] 决战需要 ${needed} 本【效率提升 / Progress Booster】，当前库存仅有 ${currentStock} 本！建议手动在商店买满 15 本以最大化代币收益。当前将按现存库存最大限度挂载。`);
-    }
-
-    const attrs = root.adeck.getModifiers?.() ?? {};
-    const bType = attrs[boosterId]?.Type ?? 1;
-    let available = currentStock;
-
-    tokenSlotIndices.forEach(idx => {
-      if (choice.plan.cards[idx] && available > 0) {
-        const currentMods = choice.plan.modifiers[idx] ?? [];
-        choice.plan.modifiers[idx] = [...currentMods.filter(id => attrs[id]?.Type !== bType), boosterId];
-        available--;
+      // 1. 物理清洗非代币槽的效率书
+      if (reward.type !== 'token' || !reward.isTokenDrop) {
+        mods = mods.filter(mId => !getModInfo(mId, settings.collection.modifiers).isToken);
       }
+      // 2. 满血 3 HP 舰船绝对物理清洗快速维修包
+      if (choice.plan.cards[idx].health >= 3) {
+        mods = mods.filter(mId => !getModInfo(mId, settings.collection.modifiers).isRepair);
+      }
+
+      // 3. 终极无损去冗：试探是否有多余的绿道具 (例如密苏里单挂效率就能100%时剔除专精)
+      const greenMod = mods.find(mId => getModInfo(mId, settings.collection.modifiers).isGreenSpecial);
+      if (greenMod) {
+        const testMods = choice.plan.modifiers.map(m => m.slice());
+        testMods[idx] = mods.filter(mId => mId !== greenMod);
+        try {
+          const testRates = predictor(choice.plan.cards, testMods);
+          const targetRate = getSlotTargetRate(slot);
+          if (testRates[idx] >= targetRate - 1e-4) {
+            mods = testMods[idx];
+          }
+        } catch (e) {}
+      }
+
+      choice.plan.modifiers[idx] = mods;
     });
-
-    log(`✅ 已在代币掉落槽位装配 [${formatModifierName(boosterId)}]！非代币槽位严禁乱挂。`);
   }
 
-  async function guardCriticalCardsOnly(choice) {
-    for (let i = 0; i < 4; i++) {
-      const card = choice.plan.cards[i];
-      if (!card) continue;
-      if (card.health >= 2) {
-        choice.plan.modifiers[i] = (choice.plan.modifiers[i] ?? []).filter(mId => !isRepairModifier(mId, root.defaultState.settings.collection.modifiers));
-      }
-    }
-  }
-
-  // --- 0% 强救：若出现槽位 <50% 或 0%，彻底放宽白色战力道具与黄卡配额 ---
-  async function planKeypointWithRescue(op, kp, inventory, excludedCodes = new Set(), context = {}) {
+  // --- 【阶梯攻坚算法 (四阶递进 SOP：裸卡 ＞ 单白 ＞ 单绿 ＞ 双拼)】 ---
+  async function planKeypointWithLadder(op, kp, inventory, excludedCodes = new Set(), context = {}) {
     const settings = root.defaultState.settings;
     const effects = effectPayloads(op, kp, settings.options.appliedEffectsCancelableClearThreshold ?? 1);
     const candidates = availableCards(settings.collection.cards, inventory, activeStage(op), effects, excludedCodes);
     if (!candidates.length) return null;
+
+    const kpSlots = slots(kp);
     const core = { ...root.adeck.newSettings(), ...settings.options.defaultCoreSettings };
-    const key = JSON.stringify([core, slots(kp).map(s => s?.enemy ?? null), effects,
+    const key = JSON.stringify([core, kpSlots.map(s => s?.enemy ?? null), effects,
       [...candidates].sort((a, b) => a.code.localeCompare(b.code))]);
     if (!predictionContexts.has(key)) {
       if (predictionContexts.size >= 3) predictionContexts.delete(predictionContexts.keys().next().value);
       predictionContexts.set(key, new Map());
     }
 
+    // Step 1: 纯裸卡基准推演
     let plan = await optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
-      () => sleep(1), [], predictionContexts.get(key), async () => {}, { ...context, allowWhiteMods: false });
+      () => sleep(1), [], predictionContexts.get(key), async () => {}, { ...context, searchMode: 'bare' });
 
-    // 0% 强救：若出现槽位 <50% 或 0%，放宽现存白色战力道具与解除配额
-    if ((!plan?.safe || plan.weakestRate < 0.50 || (plan.zeroSlotCount ?? 0) > 0) && !context.isFinalBoss) {
-      log(`🛟 据点 [${kp.name ?? kp.id}] 出现危急槽位(最低胜率: ${(plan?.weakestRate * 100 || 0).toFixed(1)}%)，放宽白色战力道具与解除配额救生重算！`);
-      const rescuedPlan = await optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
-        () => sleep(1), plan ? [plan] : [], predictionContexts.get(key), async () => {}, { ...context, maxYMaxAllowed: 4, allowWhiteMods: true });
-      if (rescuedPlan && comparePlans(rescuedPlan, plan, config, context) < 0) {
-        plan = rescuedPlan;
-      }
-    }
+    if (plan?.safe) return plan;
+
+    // Step 2: 单白战力补强
+    const whitePlan = await optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
+      () => sleep(1), plan ? [plan] : [], predictionContexts.get(key), async () => {}, { ...context, searchMode: 'white' });
+
+    if (whitePlan && comparePlans(whitePlan, plan, config, context) < 0) plan = whitePlan;
+    if (plan?.safe) return plan;
+
+    // Step 3: 单绿特殊破局攻坚
+    const greenPlan = await optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
+      () => sleep(1), plan ? [plan] : [], predictionContexts.get(key), async () => {}, { ...context, searchMode: 'green', maxYMaxAllowed: 4 });
+
+    if (greenPlan && comparePlans(greenPlan, plan, config, context) < 0) plan = greenPlan;
+    if (plan?.safe) return plan;
+
+    // Step 4: 四阶终极合体攻坚 (1白 + 1绿双拼) 彻底消灭 76% 瓶颈！
+    const dualPlan = await optimizeJoint(root.adeck, settings, kp, candidates, effects, inventory, config, checkpoint,
+      () => sleep(1), plan ? [plan] : [], predictionContexts.get(key), async () => {}, { ...context, searchMode: 'dual', maxYMaxAllowed: 4 });
+
+    if (dualPlan && comparePlans(dualPlan, plan, config, context) < 0) plan = dualPlan;
 
     return plan;
   }
 
-  // --- 阶段全局联合排阵（动态需求配额） ---
   async function planStageSequentially(op, stage, inventory, remainingKeypoints) {
     const sorted = [...remainingKeypoints].sort((a, b) => getKeypointThreat(b) - getKeypointThreat(a));
     const stageAssignedCodes = new Set();
@@ -952,7 +1059,7 @@
 
     const effects = effectPayloads(op, sorted[0], root.defaultState.settings.options.appliedEffectsCancelableClearThreshold ?? 1);
     const totalAvailCards = availableCards(root.defaultState.settings.collection.cards, inventory, activeStage(op), effects);
-    const totalYellowCount = totalAvailCards.filter(c => getCardColor(c).tierGroup === 'yellow').length;
+    const totalYellowCount = totalAvailCards.filter(c => getCardColor(c).rank >= 7).length;
 
     sorted.forEach((brief) => {
       const kpSlots = slots(brief);
@@ -967,7 +1074,7 @@
       const isCommonBossBattle = slots(kp).some(s => isCommonBoss(s?.enemy));
       const threat = getKeypointThreat(kp);
 
-      const tag = isFinalBoss ? '👑 关底决战Boss/Final Epic (全黄卡主力压上/零绿道具)' :
+      const tag = isFinalBoss ? '👑 关底决战Boss/Final Epic' :
         isCommonBossBattle ? '⚔️ 黄卡精英据点' :
         threat >= 500 ? '🛡️ 困难攻坚据点' : '⚓ 简单小怪据点';
 
@@ -979,9 +1086,9 @@
         collectionMods: root.defaultState.settings.collection.modifiers
       };
 
-      const plan = await planKeypointWithRescue(op, kp, inventory, stageAssignedCodes, context);
+      const plan = await planKeypointWithLadder(op, kp, inventory, stageAssignedCodes, context);
       if (plan && plan.cards.some(Boolean)) {
-        plansMap.set(kp.id, { kp, plan, context });
+        plansMap.set(kp.id, { op, kp, plan, context });
         plan.cards.filter(Boolean).forEach(c => stageAssignedCodes.add(c.code));
       }
     }
@@ -992,6 +1099,7 @@
   async function work(mode) {
     const preview = mode === 'preview', fillOnly = mode === 'fill';
     validate();
+
     const state = await api('state/');
     if (state.status?.state === 'unauth') throw Error('请先登录游戏。');
     const routeId = routeInfo(location.pathname).operationId;
@@ -1030,42 +1138,24 @@
 
       let inventory = await readyInventory();
 
-      // 检查道具库存并在偏低时给出友好提示
-      checkAndWarnWhiteModifierShortage(inventory, root.defaultState.settings.collection.modifiers);
-
       log(`🔄 启动当前阶段 (${remaining.length} 据点) 全局统筹规划...`);
       const { sorted, plansMap } = await planStageSequentially(op, stage, inventory, remaining);
 
       if (stopped) {
         const firstEntry = plansMap.values().next().value;
         if (firstEntry) {
-          log('🛑 [用户中止计算] 已锁定并提取当前探索到的最大胜率方案：');
-          printPlan(firstEntry.kp, firstEntry.plan, '当前最优建议阵容');
+          log('🛑 [用户中止计算] 已提取当前最优方案回填卡槽。');
           await syncBoard(id, firstEntry.kp, firstEntry.plan, true);
         }
         log('已安全停止。');
         return;
       }
 
-      if (fillOnly) {
-        for (const [kpId, item] of plansMap) {
-          await guardCriticalCardsOnly(item);
-          if (item.context.isFinalBoss) {
-            equipTokenBoostersFromStock(op, item, inventory);
-          }
-          printPlan(item.kp, item.plan, '自动选卡结果');
-          await syncBoard(id, item.kp, item.plan, true);
-        }
-        log('✅ 当前阶段所有据点已完成全局选卡排阵，准备就绪！');
-        return;
-      }
-
-      const targetBrief = sorted.find(b => plansMap.has(b.id));
-      if (!targetBrief) {
+      if (plansMap.size === 0) {
         if (stageDone(stage)) {
-          log('剩余据点手牌不足以稳胜，但阶段目标已达成，安全前往下一阶段。');
+          log('阶段目标已达成，安全前往下一阶段。');
           const next = op.stages[op.stages.indexOf(stage) + 1];
-          if (next) {
+          if (next && !preview && !fillOnly) {
             await api('operation/next-stage/', {});
             await poll(() => readOperation(id), o => activeStage(o)?.id === next.id, '阶段切换');
             await refreshPage(id);
@@ -1075,38 +1165,78 @@
         throw Error('没有找到满足达标线的可用阵容。');
       }
 
-      const choice = plansMap.get(targetBrief.id);
+      // 【阶段全域排兵布阵】
+      log(`🏛️ 【阶段全局部署】开始将推演好的 ${plansMap.size} 个据点阵型全量填入作战棋盘...`);
+      for (let i = 0; i < sorted.length; i++) {
+        if (stopped) break;
+        const brief = sorted[i];
+        if (!plansMap.has(brief.id)) continue;
+        const item = plansMap.get(brief.id);
 
-      await guardCriticalCardsOnly(choice);
+        enforceFinalModCleanliness(item, root.adeck, root.defaultState.settings);
 
-      if (choice.context.isFinalBoss) {
-        equipTokenBoostersFromStock(op, choice, inventory);
+        log(`📍 [${i + 1}/${sorted.length}] 正在为据点 [${item.kp.name ?? item.kp.id}] 装载卡牌与道具...`);
+        await syncBoard(id, item.kp, item.plan, true);
+        printPlan(item.kp, item.plan, `阶段部署确认 - ${item.kp.name ?? item.kp.id}`);
       }
 
-      printPlan(choice.kp, choice.plan, '拟出战方案');
-      if (preview) { log('预览结束，未发送战斗请求。'); return; }
-
-      await syncBoard(id, choice.kp, choice.plan, !choice.plan.safe);
-      if (!choice.plan.safe) {
-        log(`该据点有槽位未达动态胜率目标，已填入卡槽，暂停自动出战。`);
+      if (fillOnly) {
+        log('✅ 当前阶段所有据点已完成全局选卡排阵，准备就绪！');
         return;
       }
 
-      checkpoint();
-      const battleSetup = {
-        slots: choice.plan.cards.map((c, i) => c ? {
-          cardCode: c.code,
-          ...((choice.plan.modifiers?.[i]?.length ?? 0) > 0 ? { modifiers: choice.plan.modifiers[i] } : {})
-        } : null)
-      };
+      if (preview) {
+        log('👀 预览结束：全阶段阵型已全部展示并部署在棋盘，未发送战斗请求。');
+        return;
+      }
 
-      log(`提交据点 [${choice.kp.name ?? choice.kp.id}] 出战...`);
-      await api('keypoint/start/', { keypointId: choice.kp.id, battleSetup });
-      const result = await poll(() => readKeypoint(choice.kp.id), finished, '战斗结算');
-      await refreshPage(id, result);
-      log(`战斗已结算：获胜 ${slots(result).filter(s => s?.outcome === 'win').length} 个位置。`);
-      await sleep(config.delayMs);
-      battles++;
+      log(`🚀 【全军就绪】当前阶段全域阵型已布设完毕！开始按战略攻坚顺序依次发起出战...`);
+      await sleep(1000);
+
+      for (const targetBrief of sorted) {
+        if (stopped) break;
+        if (!plansMap.has(targetBrief.id)) continue;
+
+        const choice = plansMap.get(targetBrief.id);
+        const kpId = choice.kp.id;
+
+        const currentKp = await readKeypoint(kpId);
+        if (finished(currentKp)) continue;
+
+        // 【门禁安全审查 (Gatekeeper)】
+        if (!choice.plan.safe) {
+          log(`🛑 【门禁拦截】据点 [${choice.kp.name ?? choice.kp.id}] 未达到安全胜率线 (最弱槽胜率: ${(choice.plan.weakestRate*100).toFixed(1)}%)！`);
+          log(`🛑 为严防弃坑翻车并保护修船包等珍贵资产，脚本已暂停自动战斗，请手动微调或确认！`);
+          await syncBoard(id, choice.kp, choice.plan, true);
+          return;
+        }
+
+        log(`⚔️ [攻坚就绪] 正在切入据点 [${choice.kp.name ?? choice.kp.id}] 发起出战...`);
+        await syncBoard(id, choice.kp, choice.plan, true);
+
+        checkpoint();
+        const battleSetup = {
+          slots: choice.plan.cards.map((c, i) => c ? {
+            cardCode: c.code,
+            ...((choice.plan.modifiers?.[i]?.length ?? 0) > 0 ? { modifiers: choice.plan.modifiers[i] } : {})
+          } : null)
+        };
+
+        log(`💥 提交据点 [${choice.kp.name ?? choice.kp.id}] 出战...`);
+        await api('keypoint/start/', { keypointId: choice.kp.id, battleSetup });
+        const result = await poll(() => readKeypoint(choice.kp.id), finished, '战斗结算');
+        await refreshPage(id, result);
+
+        const wonCount = slots(result).filter(s => s?.outcome === 'win').length;
+        log(`🎖️ 据点 [${choice.kp.name ?? choice.kp.id}] 战斗已结算：击破 ${wonCount} / 4 个目标！`);
+        battles++;
+        await sleep(config.delayMs);
+
+        if (wonCount < 4) {
+          log(`⚠️ 据点未达成 4/4 全胜，触发【战局自适应重估机制】，正在基于最新血量重新统筹后续据点...`);
+          break;
+        }
+      }
     }
   }
 
@@ -1130,7 +1260,7 @@
     run: () => start('run'),
     stop: () => {
       stopped = true;
-      log('已收到停止指令，正在结束计算，提取当前最佳阵容回填卡槽...');
+      log('已收到停止指令，提取当前最佳阵容回填卡槽...');
     },
     isStopped: () => stopped,
     get running() { return running; },
@@ -1205,7 +1335,7 @@ pre {
     <h3>Pacific Front 游玩 v${SCRIPT_VERSION} ✛</h3>
     <button id="hide" style="padding:2px 6px;font-size:11px;">收起</button>
   </div>
-  <div class="note">⭐ 道具用多不用少 · 空仓提醒买15个 · 裸卡优先</div>
+  <div class="note">⭐ 四阶双拼攻坚 · 煤炭战略确权 · 门禁一票否决</div>
   <div class="btn-group">
     <button id="fill">自动选卡</button>
     <button id="run" class="primary">自动游玩</button>
@@ -1256,5 +1386,5 @@ pre {
   window.addEventListener('mouseup', () => { isDragging = false; });
 
   document.documentElement.append(host);
-  log(`v${SCRIPT_VERSION} 已加载：道具用多不用少、空仓温馨提醒手动买15个(禁自动扣款)、裸卡后备生效。`);
+  log(`v${SCRIPT_VERSION} 已加载：四阶双拼攻坚、煤炭战略确权、无损去冗生效。`);
 })(typeof window === 'object' ? window : globalThis);
